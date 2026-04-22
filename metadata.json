@@ -1,0 +1,6 @@
+{
+  "name": "PromotePress",
+  "description": "An intelligent event promotion platform that generates scheduled marketing content using AWS Bedrock.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
