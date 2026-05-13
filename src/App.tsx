@@ -2,8 +2,6 @@ import React, { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Calendar, 
-  Building2, 
-  MapPin, 
   DollarSign, 
   Image as ImageIcon, 
   Plus, 
@@ -14,10 +12,20 @@ import {
   Info,
   User,
   Hash,
-  MessageSquare,
   Layout,
+  Clock,
+  Clipboard,
+  Check,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
-import type { EventDetails, PromoPost, Sponsor, CampaignResult } from './types';
+import type {
+  CampaignResult,
+  EventDetails,
+  GeneratePostsErrorData,
+  OllamaConfigStatus,
+  PromoPost,
+} from './types';
 
 // Mock empty state for the form
 const initialEvent: EventDetails = {
@@ -37,27 +45,88 @@ const initialEvent: EventDetails = {
   tone: 'Professional',
   postCount: 6,
   budget: '',
-  goals: '',
 };
+
+const testEventData: EventDetails = {
+  ...initialEvent,
+  id: crypto.randomUUID(),
+  eventName: 'AI for Local Retail: From Empty Shelves to Smarter Campaigns',
+  companyName: 'Baltic Retail Lab',
+  startDate: '2026-09-24',
+  ticketPrices: '39 EUR',
+  primaryTargetAudience: 'Small retail business owners in Estonia who manage physical stores and want to use artificial intelligence to improve marketing, stock visibility and customer communication.',
+  secondaryAudiences: [
+    'Marketing coordinators working in small retail chains who need practical tools for creating campaigns faster with limited resources.',
+    'Solo entrepreneurs and family-owned shop managers who are not technical specialists but want to understand how artificial intelligence can help with everyday business tasks.',
+  ],
+  channels: ['Instagram', 'Facebook', 'Email'],
+  tone: 'Professional',
+  postCount: 6,
+  budget: '750 EUR',
+  eventDescription: 'Baltic Retail Lab is organizing a practical half-day workshop for local retail businesses in Tallinn. The event focuses on how small shops can use artificial intelligence tools to plan marketing campaigns, write product-focused promotional texts, understand customer segments and reduce time spent on repetitive content tasks. The workshop is designed for non-technical participants, so the messaging must clearly state that no programming or artificial intelligence background is required. A key marketing goal is to position the event as practical, beginner-friendly and directly useful for small retailers, not as a technical conference. The campaign should emphasize that participants will leave with ready-to-use campaign ideas and examples for their own store. Specific condition 1: the venue has only 45 seats, so all marketing content should create a sense of limited availability without sounding aggressive or manipulative. Specific condition 2: one of the primary sponsors is a sustainable packaging company, so the content should subtly connect artificial intelligence, smarter retail planning and reduced waste, but it must not make unrealistic environmental claims. Specific condition 3: the event takes place during a weekday morning, so the campaign should address possible hesitation from busy shop owners by highlighting the short format, practical value and time-saving benefits. Specific condition 4: the campaign should avoid overly technical language such as model training, neural networks or automation architecture, because the audience is business-oriented and beginner-level.',
+  sponsors: [
+    { name: 'Tallinn Small Business Association' },
+    { name: 'Estonian Retail Innovation Network' },
+    { name: 'GreenPack Solutions' },
+    { name: 'NordPay Business Banking' },
+  ],
+};
+
+const resizeEventDescriptionTextarea = (textarea: HTMLTextAreaElement) => {
+  textarea.style.height = 'auto';
+  textarea.style.height = `${textarea.scrollHeight}px`;
+};
+
+const RequiredBadge = () => (
+  <span className="ml-1 text-secondary" title="Required" aria-label="Required">
+    *
+  </span>
+);
+
+const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onloadend = () => resolve(String(reader.result || ''));
+  reader.onerror = () => reject(reader.error);
+  reader.readAsDataURL(file);
+});
 
 export default function App() {
   const [view, setView] = useState<'form' | 'results' | 'settings'>('form');
   const [eventData, setEventData] = useState<EventDetails>(initialEvent);
   const [posts, setPosts] = useState<PromoPost[]>([]);
   const [marketingPlan, setMarketingPlan] = useState<string>('');
+  const [selectedModel, setSelectedModel] = useState('');
+  const [generatedModel, setGeneratedModel] = useState<string | null>(null);
+  const [generationTimeMs, setGenerationTimeMs] = useState<number | null>(null);
+  const [generationMetrics, setGenerationMetrics] = useState<CampaignResult['generationMetrics'] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [awsStatus, setAwsStatus] = useState<{ awsConfigured: boolean; region: string; modelId: string } | null>(null);
+  const [copiedItem, setCopiedItem] = useState<string | null>(null);
+  const [generatedPanelOpen, setGeneratedPanelOpen] = useState(true);
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaConfigStatus | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const eventDescriptionRef = useRef<HTMLTextAreaElement>(null);
 
   React.useEffect(() => {
     fetch('/api/config-status')
       .then(res => res.json())
-      .then(data => setAwsStatus(data))
+      .then(data => {
+        setOllamaStatus(data);
+        setSelectedModel(current => current || data.modelId || 'qwen2.5:7b');
+      })
       .catch(err => console.error('Failed to fetch config status', err));
   }, []);
 
-  const handleSubmit = async (e: React.FormEvent, forceDemo = false) => {
+  React.useEffect(() => {
+    const textarea = eventDescriptionRef.current;
+    if (!textarea) {
+      return;
+    }
+
+    resizeEventDescriptionTextarea(textarea);
+  }, [eventData.eventDescription]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e && e.preventDefault();
     setLoading(true);
     setError(null);
@@ -68,20 +137,31 @@ export default function App() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ event: eventData, demo: forceDemo }),
+        body: JSON.stringify({ event: eventData, model: activeModel }),
       });
 
-      const data: CampaignResult = await response.json();
+      const data = await response.json() as CampaignResult | GeneratePostsErrorData;
 
       if (!response.ok) {
-        throw new Error((data as any).error || 'Failed to generate posts');
+        throw new Error('error' in data ? data.error : 'Failed to generate posts');
       }
 
-      setPosts(data.posts);
-      setMarketingPlan(data.marketingPlan);
+      const campaign = data as CampaignResult;
+
+      if (!Array.isArray(campaign.posts) || campaign.posts.length === 0) {
+        throw new Error('The model returned an empty campaign. Try again or reduce the number of posts.');
+      }
+
+      setPosts(campaign.posts);
+      setMarketingPlan(typeof campaign.marketingPlan === 'string' ? campaign.marketingPlan : '');
+      setGeneratedModel(campaign.modelId ?? activeModel);
+      setGenerationTimeMs(campaign.generationTimeMs ?? null);
+      setGenerationMetrics(campaign.generationMetrics ?? null);
+      setGeneratedPanelOpen(true);
       setView('results');
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to generate posts');
+      setView('form');
     } finally {
       setLoading(false);
     }
@@ -111,44 +191,51 @@ export default function App() {
     }));
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files) {
-      Array.from(files).forEach((file: File) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setEventData(prev => ({
-            ...prev,
-            visualAssets: [...(prev.visualAssets || []), reader.result as string]
-          }));
-        };
-        reader.readAsDataURL(file);
-      });
+  const appendVisualAssetFiles = async (files: FileList | null) => {
+    if (!files?.length) {
+      return;
     }
+
+    const urls = (await Promise.all(Array.from(files).map(fileToDataUrl))).filter(Boolean);
+    setEventData(prev => ({
+      ...prev,
+      visualAssets: [...prev.visualAssets, ...urls],
+    }));
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    appendVisualAssetFiles(e.target.files);
+    e.target.value = '';
   };
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    const files = e.dataTransfer.files;
-    if (files) {
-      Array.from(files).forEach((file: File) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setEventData(prev => ({
-            ...prev,
-            visualAssets: [...(prev.visualAssets || []), reader.result as string]
-          }));
-        };
-        reader.readAsDataURL(file);
-      });
-    }
+    appendVisualAssetFiles(e.dataTransfer.files);
   };
 
   const updateSponsor = (index: number, name?: string, logoUrl?: string) => {
-    const newSponsors = [...eventData.sponsors];
-    if (name !== undefined) newSponsors[index].name = name;
-    if (logoUrl !== undefined) newSponsors[index].logoUrl = logoUrl;
-    setEventData(prev => ({ ...prev, sponsors: newSponsors }));
+    setEventData(prev => ({
+      ...prev,
+      sponsors: prev.sponsors.map((sponsor, sponsorIndex) => {
+        if (sponsorIndex !== index) {
+          return sponsor;
+        }
+
+        return {
+          ...sponsor,
+          ...(name !== undefined ? { name } : {}),
+          ...(logoUrl !== undefined ? { logoUrl } : {}),
+        };
+      }),
+    }));
+  };
+
+  const uploadSponsorLogo = async (index: number, file?: File) => {
+    if (!file) {
+      return;
+    }
+
+    updateSponsor(index, undefined, await fileToDataUrl(file));
   };
 
   const removeSponsor = (index: number) => {
@@ -156,6 +243,101 @@ export default function App() {
       ...prev,
       sponsors: prev.sponsors.filter((_, i) => i !== index)
     }));
+  };
+
+  const formatGenerationTime = (milliseconds: number) => {
+    if (milliseconds < 1000) {
+      return `${milliseconds} ms`;
+    }
+
+    return `${(milliseconds / 1000).toFixed(1)} s`;
+  };
+
+  const formatModelDate = (value?: string) => {
+    if (!value) {
+      return 'Unknown';
+    }
+
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+  };
+
+  const compactDigest = (value?: string) => {
+    if (!value) {
+      return 'Unknown';
+    }
+
+    return value.length > 18 ? `${value.slice(0, 18)}...` : value;
+  };
+
+  const isCloudModelName = (name: string) => name.includes(':cloud') || name.includes('-cloud');
+
+  const knownOllamaTimeMs = [
+    generationMetrics?.loadMs,
+    generationMetrics?.promptEvalMs,
+    generationMetrics?.responseEvalMs,
+  ].reduce((sum, value) => sum + (typeof value === 'number' ? value : 0), 0);
+  const unaccountedOllamaTimeMs = typeof generationMetrics?.totalMs === 'number'
+    ? Math.max(generationMetrics.totalMs - knownOllamaTimeMs, 0)
+    : undefined;
+
+  const visibleGenerationMetrics = [
+    { label: 'App wall-clock', value: generationTimeMs ?? undefined, hint: 'Full time measured by the app: backend request, Ollama call, JSON parsing, retries if any, and response handling.' },
+    { label: 'Ollama total', value: generationMetrics?.totalMs, hint: 'Total time reported by Ollama for this generation request.' },
+    { label: 'Known parts', value: knownOllamaTimeMs || undefined, hint: 'Sum of the detailed Ollama timings shown below: model load, prompt processing, and answer generation.' },
+    { label: 'Unaccounted', value: unaccountedOllamaTimeMs, hint: 'Part of Ollama total that is not split into detailed fields. This can include internal scheduling, request overhead, and other Ollama processing.' },
+    { label: 'Load', value: generationMetrics?.loadMs, hint: 'Time Ollama spent loading or preparing the selected model before generation.' },
+    { label: 'Prompt eval', value: generationMetrics?.promptEvalMs, hint: 'Time Ollama spent reading and processing the prompt before writing the answer.' },
+    { label: 'Answer eval', value: generationMetrics?.responseEvalMs, hint: 'Time Ollama spent generating the answer text.' },
+  ].filter((metric): metric is { label: string; value: number; hint: string } => typeof metric.value === 'number');
+
+  const visibleGenerationCounts = [
+    { label: 'Prompt tokens', value: generationMetrics?.promptEvalCount, hint: 'Number of prompt tokens Ollama processed before generation.' },
+    { label: 'Answer tokens', value: generationMetrics?.responseEvalCount, hint: 'Number of tokens Ollama generated in the answer.' },
+  ].filter((metric): metric is { label: string; value: number; hint: string } => typeof metric.value === 'number');
+  const configuredModels = ollamaStatus?.models?.length
+    ? ollamaStatus.models
+    : [{ name: selectedModel || 'qwen2.5:7b', available: !!ollamaStatus?.modelAvailable, info: ollamaStatus?.modelInfo }];
+  const activeModel = selectedModel || configuredModels[0]?.name || 'qwen2.5:7b';
+  const activeModelRecord = configuredModels.find(model => model.name === activeModel);
+  const selectedModelInfo = activeModelRecord?.info ?? null;
+  const selectedModelAvailable = !!activeModelRecord?.available;
+  const selectedModelWeight = isCloudModelName(activeModel) ? 'Cloud-hosted' : selectedModelInfo?.size || 'Unknown';
+
+  const copyToClipboard = async (value: string, itemId: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopiedItem(itemId);
+    window.setTimeout(() => setCopiedItem(current => current === itemId ? null : current), 1600);
+  };
+
+  const formatCampaignForCopy = () => {
+    const postText = posts.map((post, index) => [
+      `Post ${index + 1}`,
+      `Channel: ${post.channel}`,
+      `Timing: ${post.interval}`,
+      `Scheduled: ${post.scheduledDate} ${post.scheduledTime}`,
+      `Content: ${post.content}`,
+      post.visualSuggestion ? `Visual: ${post.visualSuggestion}` : '',
+    ].filter(Boolean).join('\n')).join('\n\n');
+
+    return [
+      'Campaign Strategy',
+      marketingPlan,
+      '',
+      'Generated Posts',
+      postText,
+    ].join('\n');
+  };
+
+  const fillTestEventData = () => {
+    setEventData({
+      ...testEventData,
+      id: crypto.randomUUID(),
+      sponsors: testEventData.sponsors.map(sponsor => ({ ...sponsor })),
+      visualAssets: [...testEventData.visualAssets],
+      secondaryAudiences: [...testEventData.secondaryAudiences],
+      channels: [...testEventData.channels],
+    });
   };
 
   return (
@@ -189,16 +371,16 @@ export default function App() {
             className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-semibold ${view === 'settings' ? 'bg-[#EEF2FF] text-primary' : 'text-text-dim hover:bg-bg-main'}`}
           >
             <Info className="w-5 h-5" />
-            <span>Bedrock Settings</span>
+            <span>Ollama Settings</span>
           </button>
         </nav>
 
         <div className="mt-auto">
-          <div className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold ${awsStatus?.awsConfigured ? 'bg-[#D1FAE5] text-[#065F46]' : 'bg-secondary/10 text-secondary'}`}>
-            {awsStatus?.awsConfigured ? 'AWS Bedrock Active' : 'AWS Not Configured'}
+          <div className={`inline-flex items-center px-3 py-1 rounded-full text-[11px] font-bold ${ollamaStatus?.ollamaAvailable && selectedModelAvailable ? 'bg-[#D1FAE5] text-[#065F46]' : 'bg-secondary/10 text-secondary'}`}>
+            {ollamaStatus?.ollamaAvailable && selectedModelAvailable ? 'Ollama Active' : 'Ollama Not Ready'}
           </div>
           <p className="text-[10px] text-text-dim mt-2 font-medium">
-            {awsStatus?.modelId || 'titan-text'}
+            {activeModel}
           </p>
         </div>
       </aside>
@@ -221,11 +403,34 @@ export default function App() {
 
               <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
                 <div className="bg-white p-6 rounded-[24px] border border-border-main shadow-sm space-y-6">
-                  <div className="text-xl font-bold text-text-main mb-4">Event Details</div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                    <div className="text-xl font-bold text-text-main">Event Details</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <select
+                        value={activeModel}
+                        onChange={event => setSelectedModel(event.target.value)}
+                        className="px-3 py-1.5 rounded-lg bg-white border border-border-main text-[10px] font-extrabold text-text-main outline-none focus:border-primary"
+                        title="Select Ollama model"
+                      >
+                        {configuredModels.map(model => (
+                          <option key={model.name} value={model.name}>
+                            {model.name}{model.available ? '' : ' (missing)'}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="button"
+                        onClick={fillTestEventData}
+                        className="px-3 py-1.5 rounded-lg bg-primary/10 text-primary text-[10px] font-extrabold uppercase tracking-wider hover:bg-primary/20 transition-colors"
+                      >
+                        Test event data
+                      </button>
+                    </div>
+                  </div>
                   
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1.5">
-                      <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">Event Name</label>
+                      <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">Event Name<RequiredBadge /></label>
                       <input
                         required
                         type="text"
@@ -236,7 +441,7 @@ export default function App() {
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">Company Name</label>
+                      <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">Company Name<RequiredBadge /></label>
                       <input
                         required
                         type="text"
@@ -251,7 +456,7 @@ export default function App() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1.5">
                       <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim flex items-center gap-2">
-                        <Calendar className="w-3 h-3" /> Start Date
+                        <Calendar className="w-3 h-3" /> Start Date<RequiredBadge />
                       </label>
                       <input
                         required
@@ -263,7 +468,7 @@ export default function App() {
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim flex items-center gap-2">
-                        <DollarSign className="w-3 h-3" /> Ticket Prices
+                        <DollarSign className="w-3 h-3" /> Ticket Prices<RequiredBadge />
                       </label>
                       <input
                         required
@@ -277,7 +482,7 @@ export default function App() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">Target Audiences</label>
+                    <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">Target Audiences<RequiredBadge /></label>
                     <div className="space-y-3">
                       <div className="flex items-center gap-2">
                         <User className="w-4 h-4 text-primary" />
@@ -383,14 +588,20 @@ export default function App() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim underline decoration-primary decoration-2 underline-offset-4">Event Pitch & Marketing Goals</label>
+                    <label className="text-[12px] font-bold uppercase tracking-wider text-text-dim">
+                      <span className="underline decoration-primary decoration-2 underline-offset-4">Event Pitch & Marketing Goals</span><RequiredBadge />
+                    </label>
                     <textarea
+                      ref={eventDescriptionRef}
                       required
-                      rows={3}
-                      className="w-full px-4 py-3 border-2 border-border-main rounded-xl focus:border-primary outline-none text-sm transition-colors resize-none"
+                      rows={4}
+                      className="w-full min-h-[120px] px-4 py-3 border-2 border-border-main rounded-xl focus:border-primary outline-none text-sm transition-colors resize-y overflow-hidden"
                       placeholder="Goal: Increase signups by 20%. Context: This is our first major community event..."
                       value={eventData.eventDescription}
-                      onChange={e => setEventData({ ...eventData, eventDescription: e.target.value })}
+                      onChange={e => {
+                        resizeEventDescriptionTextarea(e.currentTarget);
+                        setEventData({ ...eventData, eventDescription: e.target.value });
+                      }}
                     />
                   </div>
 
@@ -471,12 +682,8 @@ export default function App() {
                             className="hidden"
                             accept="image/*"
                             onChange={(e) => {
-                              const file = e.target.files?.[0];
-                              if (file) {
-                                const reader = new FileReader();
-                                reader.onloadend = () => updateSponsor(idx, undefined, reader.result as string);
-                                reader.readAsDataURL(file);
-                              }
+                              uploadSponsorLogo(idx, e.target.files?.[0]);
+                              e.target.value = '';
                             }}
                           />
                           <button
@@ -539,15 +746,8 @@ export default function App() {
 
                   <div className="space-y-3">
                     {error && (
-                      <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm border border-red-100 flex flex-col gap-3">
+                      <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm border border-red-100">
                         <p className="text-xs">{error}</p>
-                        <button 
-                          type="button" 
-                          onClick={(e) => handleSubmit(e, true)}
-                          className="text-[10px] font-bold underline text-left hover:text-red-700"
-                        >
-                          Try Demo Mode instead? (Simulates AI output without AWS connection)
-                        </button>
                       </div>
                     )}
                     <button
@@ -556,20 +756,14 @@ export default function App() {
                       className="w-full bg-primary text-white font-bold py-4 rounded-xl shadow-lg shadow-primary/20 hover:opacity-90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 text-sm"
                     >
                       {loading ? (
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <>
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          <span>Generating...</span>
+                        </>
                       ) : (
                         "Schedule & Launch Automation"
                       )}
                     </button>
-                    {!awsStatus?.awsConfigured && (
-                      <button
-                        type="button"
-                        onClick={(e) => handleSubmit(e, true)}
-                        className="w-full bg-white border-2 border-primary text-primary font-bold py-4 rounded-xl hover:bg-neutral-50 transition-all text-sm"
-                      >
-                        Try Demo Mode (Instant)
-                      </button>
-                    )}
                   </div>
                 </div>
               </form>
@@ -583,18 +777,28 @@ export default function App() {
               className="space-y-10"
             >
               <div className="space-y-6">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <h2 className="text-[28px] font-bold text-text-main pb-1 tracking-tight">Campaign Strategy</h2>
                     <p className="text-text-dim text-sm">AI-Optimized plan for <span className="text-primary font-bold italic">{eventData.eventName}</span>.</p>
                   </div>
-                  <button
-                    onClick={() => setView('form')}
-                    className="flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-border-main rounded-xl text-xs font-bold text-text-dim hover:bg-neutral-50 transition-colors shadow-sm"
-                  >
-                    <Plus className="w-4 h-4" />
-                    New Campaign
-                  </button>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(formatCampaignForCopy(), 'campaign-all')}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-white border-2 border-primary/20 rounded-xl text-xs font-bold text-primary hover:bg-primary/5 transition-colors shadow-sm"
+                    >
+                      {copiedItem === 'campaign-all' ? <Check className="w-4 h-4" /> : <Clipboard className="w-4 h-4" />}
+                      {copiedItem === 'campaign-all' ? 'Copied' : 'Copy All'}
+                    </button>
+                    <button
+                      onClick={() => setView('form')}
+                      className="flex items-center gap-2 px-5 py-2.5 bg-white border-2 border-border-main rounded-xl text-xs font-bold text-text-dim hover:bg-neutral-50 transition-colors shadow-sm"
+                    >
+                      <Plus className="w-4 h-4" />
+                      New Campaign
+                    </button>
+                  </div>
                 </div>
 
                 {/* Marketing Plan Summary */}
@@ -603,9 +807,19 @@ export default function App() {
                   animate={{ opacity: 1, y: 0 }}
                   className="bg-primary/5 border border-primary/20 rounded-[24px] p-6"
                 >
-                  <div className="flex items-center gap-2 mb-3">
-                    <Layout className="w-5 h-5 text-primary" />
-                    <h3 className="font-bold text-text-main">Executive Strategy Summary</h3>
+                  <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                    <div className="flex items-center gap-2">
+                      <Layout className="w-5 h-5 text-primary" />
+                      <h3 className="font-bold text-text-main">Executive Strategy Summary</h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(marketingPlan, 'marketing-plan')}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-primary/20 text-[10px] font-extrabold uppercase tracking-wider text-primary hover:bg-primary/5 transition-colors"
+                    >
+                      {copiedItem === 'marketing-plan' ? <Check className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
+                      {copiedItem === 'marketing-plan' ? 'Copied' : 'Copy'}
+                    </button>
                   </div>
                   <div className="text-sm text-text-main leading-relaxed">
                     {marketingPlan}
@@ -615,7 +829,7 @@ export default function App() {
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {posts.map((post, idx) => (
                     <motion.div
-                      key={idx}
+                      key={post.id || idx}
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
                       transition={{ delay: idx * 0.05 }}
@@ -623,21 +837,21 @@ export default function App() {
                     >
                       <div className="flex justify-between items-center">
                         <div className="flex flex-col">
-                          <span className="text-[10px] font-extrabold text-primary uppercase tracking-widest mb-1">{post.interval}</span>
+                          <span className="text-[10px] font-extrabold text-primary uppercase tracking-widest mb-1">{post.interval || 'Unscheduled'}</span>
                           <div className="flex items-center gap-2">
                             <Hash className="w-3 h-3 text-text-dim" />
-                            <span className="text-[11px] font-bold text-text-dim">{post.channel}</span>
+                            <span className="text-[11px] font-bold text-text-dim">{post.channel || 'General'}</span>
                           </div>
                         </div>
                         <div className="text-right">
-                          <span className="text-[10px] text-text-dim font-medium block">{post.scheduledDate}</span>
-                          <span className="text-[10px] text-text-dim font-medium block">{post.scheduledTime}</span>
+                          <span className="text-[10px] text-text-dim font-medium block">{post.scheduledDate || 'TBD'}</span>
+                          <span className="text-[10px] text-text-dim font-medium block">{post.scheduledTime || 'TBD'}</span>
                         </div>
                       </div>
 
                       <div className="flex-1 min-h-[100px]">
                         <div className="text-[13px] text-text-main leading-relaxed italic font-medium">
-                          "{post.content}"
+                          "{post.content || 'No content returned.'}"
                         </div>
                       </div>
 
@@ -649,7 +863,7 @@ export default function App() {
                           </div>
                           <div className="bg-bg-main p-3 rounded-xl border border-dashed border-[#CBD5E1] transition-colors group-hover:bg-neutral-50">
                             <p className="text-[10px] text-text-dim leading-snug">
-                              {post.suggestedImageUrl}
+                              {post.visualSuggestion || 'No visual suggestion returned.'}
                             </p>
                           </div>
                         </div>
@@ -666,15 +880,71 @@ export default function App() {
                         )}
                         
                         <div className="flex gap-2">
-                          <button className="flex-1 py-2.5 rounded-xl bg-primary/10 text-primary text-[11px] font-extrabold hover:bg-primary/20 transition-all uppercase tracking-wider flex items-center justify-center gap-2">
-                            <Send className="w-3.5 h-3.5" />
-                            Use Post
+                          <button
+                            type="button"
+                            onClick={() => copyToClipboard(post.content || '', `post-${idx}`)}
+                            className="flex-1 py-2.5 rounded-xl bg-primary/10 text-primary text-[11px] font-extrabold hover:bg-primary/20 transition-all uppercase tracking-wider flex items-center justify-center gap-2"
+                          >
+                            {copiedItem === `post-${idx}` ? <Check className="w-3.5 h-3.5" /> : <Clipboard className="w-3.5 h-3.5" />}
+                            {copiedItem === `post-${idx}` ? 'Copied' : 'Copy Post'}
                           </button>
                         </div>
                       </div>
                     </motion.div>
                   ))}
                 </div>
+
+                {visibleGenerationMetrics.length > 0 && (
+                  <div className="border border-border-main bg-white rounded-[24px] shadow-sm overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setGeneratedPanelOpen(open => !open)}
+                      className="w-full flex items-center justify-between gap-3 px-5 py-4 text-left hover:bg-bg-main transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-xl bg-primary/10 flex items-center justify-center">
+                          <Clock className="w-4 h-4 text-primary" />
+                        </div>
+                        <div>
+                          <div className="text-sm font-bold text-text-main">Generated</div>
+                          <div className="text-xs text-text-dim">Ollama response timing{generatedModel ? `, ${generatedModel}` : ''}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        {generationTimeMs !== null && (
+                          <span className="text-xs font-bold text-primary">{formatGenerationTime(generationTimeMs)}</span>
+                        )}
+                        <span className="text-xs font-bold text-text-dim">{generatedPanelOpen ? 'Hide' : 'Show'}</span>
+                        {generatedPanelOpen ? <ChevronUp className="w-4 h-4 text-text-dim" /> : <ChevronDown className="w-4 h-4 text-text-dim" />}
+                      </div>
+                    </button>
+                    {generatedPanelOpen && (
+                      <div className="px-5 pb-5">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                          {visibleGenerationMetrics.map(metric => (
+                            <div key={metric.label} className="rounded-xl border border-border-main bg-bg-main p-3" title={metric.hint}>
+                              <div className="text-[10px] font-extrabold uppercase tracking-wider text-text-dim">{metric.label}</div>
+                              <div className="mt-1 text-sm font-bold text-text-main">{formatGenerationTime(metric.value)}</div>
+                            </div>
+                          ))}
+                        </div>
+                        {visibleGenerationCounts.length > 0 && (
+                          <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {visibleGenerationCounts.map(metric => (
+                              <div key={metric.label} className="rounded-xl border border-border-main bg-bg-main p-3" title={metric.hint}>
+                                <div className="text-[10px] font-extrabold uppercase tracking-wider text-text-dim">{metric.label}</div>
+                                <div className="mt-1 text-sm font-bold text-text-main">{metric.value}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <p className="mt-3 text-xs text-text-dim leading-relaxed">
+                          Ollama total can be larger than load + prompt eval + answer eval because it also includes internal overhead around the request.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </motion.div>
           ) : (
@@ -686,8 +956,8 @@ export default function App() {
               className="max-w-2xl"
             >
               <div className="mb-8">
-                <h2 className="text-[28px] font-bold text-text-main pb-1 tracking-tight">Bedrock Integration</h2>
-                <p className="text-text-dim text-sm">Configure your AWS connection to enable AI-powered campaign generation.</p>
+                <h2 className="text-[28px] font-bold text-text-main pb-1 tracking-tight">Ollama Integration</h2>
+                <p className="text-text-dim text-sm">Run a local Ollama model to enable AI-powered campaign generation.</p>
               </div>
 
               <div className="bg-white border border-border-main rounded-[24px] p-8 space-y-8">
@@ -696,33 +966,113 @@ export default function App() {
                   <div className="space-y-2">
                     <h4 className="font-bold text-text-main">How to add your details</h4>
                     <p className="text-sm text-text-dim leading-relaxed">
-                      To connect your AWS Bedrock account, you need to add your credentials as <strong>Secrets</strong> in the AI Studio environment.
+                      Install Ollama, pull the model, and keep the Ollama service running while this app is open.
                     </p>
                     <ol className="text-sm text-text-dim space-y-1 list-decimal ml-4">
-                      <li>Open the <strong>Settings</strong> menu in the top bar.</li>
-                      <li>Go to <strong>Secrets</strong>.</li>
-                      <li>Add the following keys with your AWS values:</li>
+                      <li>Install Ollama from the official desktop app or package manager.</li>
+                      <li>Run <strong>ollama pull qwen2.5:7b</strong>.</li>
+                      <li>Start this app with <strong>npm run dev</strong>.</li>
                     </ol>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-text-main">Model Details</h3>
+                    <p className="text-xs text-text-dim mt-1">
+                      These values come from Ollama when available, with fallback details for known cloud-hosted models.
+                    </p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-extrabold uppercase tracking-wider text-text-dim">Active model</label>
+                    <select
+                      value={activeModel}
+                      onChange={event => setSelectedModel(event.target.value)}
+                      className="w-full px-4 py-3 border-2 border-border-main rounded-xl focus:border-primary outline-none text-sm bg-white font-bold"
+                    >
+                      {configuredModels.map(model => (
+                        <option key={model.name} value={model.name}>
+                          {model.name}{model.available ? '' : ' (missing, pull required)'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                    <div className="p-4 bg-bg-main rounded-xl border border-border-main">
+                      <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Model</div>
+                      <div className="mt-1 font-bold text-text-main">{activeModel}</div>
+                    </div>
+                    <div className="p-4 bg-bg-main rounded-xl border border-border-main">
+                      <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Weight</div>
+                      <div className="mt-1 font-bold text-text-main">{selectedModelWeight}</div>
+                    </div>
+                    <div className="p-4 bg-bg-main rounded-xl border border-border-main">
+                      <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Parameters</div>
+                      <div className="mt-1 font-bold text-text-main">{selectedModelInfo?.parameterSize || 'Unknown'}</div>
+                    </div>
+                    <div className="p-4 bg-bg-main rounded-xl border border-border-main">
+                      <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Quantization</div>
+                      <div className="mt-1 font-bold text-text-main">{selectedModelInfo?.quantizationLevel || 'Unknown'}</div>
+                    </div>
+                    <div className="p-4 bg-bg-main rounded-xl border border-border-main">
+                      <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Family</div>
+                      <div className="mt-1 font-bold text-text-main">{selectedModelInfo?.family || 'Unknown'}</div>
+                    </div>
+                    <div className="p-4 bg-bg-main rounded-xl border border-border-main">
+                      <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Modified</div>
+                      <div className="mt-1 font-bold text-text-main">{formatModelDate(selectedModelInfo?.modifiedAt)}</div>
+                    </div>
+                  </div>
+                  <div className="p-4 bg-bg-main rounded-xl border border-border-main text-xs">
+                    <div className="font-bold text-text-dim uppercase tracking-wider text-[10px]">Digest</div>
+                    <div className="mt-1 font-mono text-text-main">{compactDigest(selectedModelInfo?.digest)}</div>
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-bold text-text-main">Configured models</h4>
+                    <div className="grid grid-cols-1 gap-2">
+                      {configuredModels.map(model => (
+                        <button
+                          key={model.name}
+                          type="button"
+                          onClick={() => setSelectedModel(model.name)}
+                          className={`flex items-center justify-between gap-3 rounded-xl border p-3 text-left transition-colors ${
+                            activeModel === model.name
+                              ? 'border-primary bg-primary/5'
+                              : 'border-border-main bg-bg-main hover:bg-white'
+                          }`}
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-text-main">{model.name}</div>
+                            <div className="text-[10px] text-text-dim">
+                              {[model.info?.parameterSize, model.info?.quantizationLevel, isCloudModelName(model.name) ? 'Cloud-hosted' : model.info?.size].filter(Boolean).join(' / ') || 'No local metadata'}
+                            </div>
+                          </div>
+                          <span className={`text-[10px] font-extrabold uppercase tracking-wider ${model.available ? 'text-accent' : 'text-secondary'}`}>
+                            {model.available ? 'Ready' : 'Missing'}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 gap-3 font-mono text-xs">
                     <div className="flex items-center justify-between p-3 bg-bg-main rounded-lg border border-border-main">
-                      <span className="font-bold">AWS_ACCESS_KEY_ID</span>
-                      <span className={awsStatus?.awsConfigured ? 'text-accent' : 'text-secondary'}>{awsStatus?.awsConfigured ? '✓ Set' : '✗ Missing'}</span>
+                      <span className="font-bold">OLLAMA_BASE_URL</span>
+                      <span className="text-text-dim italic">{ollamaStatus?.baseUrl || 'http://localhost:11434'}</span>
                     </div>
                     <div className="flex items-center justify-between p-3 bg-bg-main rounded-lg border border-border-main">
-                      <span className="font-bold">AWS_SECRET_ACCESS_KEY</span>
-                      <span className={awsStatus?.awsConfigured ? 'text-accent' : 'text-secondary'}>{awsStatus?.awsConfigured ? '✓ Set' : '✗ Missing'}</span>
+                      <span className="font-bold">OLLAMA_MODEL</span>
+                      <span className="text-text-dim italic">{activeModel}</span>
                     </div>
                     <div className="flex items-center justify-between p-3 bg-bg-main rounded-lg border border-border-main">
-                      <span className="font-bold">AWS_REGION</span>
-                      <span className="text-text-dim italic">{awsStatus?.region || 'us-east-1'}</span>
+                      <span className="font-bold">OLLAMA_SERVER</span>
+                      <span className={ollamaStatus?.ollamaAvailable ? 'text-accent' : 'text-secondary'}>{ollamaStatus?.ollamaAvailable ? 'Available' : 'Unavailable'}</span>
                     </div>
                     <div className="flex items-center justify-between p-3 bg-bg-main rounded-lg border border-border-main">
-                      <span className="font-bold">AWS_BEDROCK_MODEL_ID</span>
-                      <span className="text-text-dim italic">{awsStatus?.modelId || 'amazon.titan-text-express-v1'}</span>
+                      <span className="font-bold">MODEL_STATUS</span>
+                      <span className={selectedModelAvailable ? 'text-accent' : 'text-secondary'}>{selectedModelAvailable ? 'Pulled' : 'Missing'}</span>
                     </div>
                   </div>
                 </div>

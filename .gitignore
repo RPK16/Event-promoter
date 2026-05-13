@@ -2,7 +2,30 @@ node_modules/
 build/
 dist/
 coverage/
+
+# Vite / frontend
+.vite/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
 .DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
 *.log
+
+# Runtime / temp
+.tmp/
+temp/
+.cache/
+
+# TypeScript
+*.tsbuildinfo
+
+# Environment
 .env*
 !.env.example

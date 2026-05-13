@@ -8,8 +8,6 @@ export interface EventDetails {
   endDate: string;
   ticketPrices: string;
   sponsors: Sponsor[];
-  logoUrl?: string;
-  eventImageUrl?: string;
   visualAssets: string[];
   primaryTargetAudience: string;
   secondaryAudiences: string[];
@@ -17,7 +15,6 @@ export interface EventDetails {
   tone: string;
   postCount: number;
   budget: string;
-  goals: string;
 }
 
 export interface Sponsor {
@@ -27,17 +24,29 @@ export interface Sponsor {
 
 export interface PromoPost {
   id: string;
-  interval: string; // "4 weeks before", etc.
-  channel: string; // From channels list
+  interval: string;
+  channel: string;
   content: string;
-  suggestedImageUrl?: string;
+  visualSuggestion?: string;
   scheduledDate: string;
   scheduledTime: string;
+}
+
+export interface GenerationMetrics {
+  totalMs?: number;
+  loadMs?: number;
+  promptEvalMs?: number;
+  responseEvalMs?: number;
+  promptEvalCount?: number;
+  responseEvalCount?: number;
 }
 
 export interface CampaignResult {
   marketingPlan: string;
   posts: PromoPost[];
+  modelId?: string;
+  generationTimeMs?: number;
+  generationMetrics?: GenerationMetrics;
 }
 
 export interface PromotionSchedule {
@@ -45,12 +54,36 @@ export interface PromotionSchedule {
   posts: PromoPost[];
 }
 
-export interface BedrockRequestData {
-  event: EventDetails;
-  demo?: boolean;
+export interface OllamaModelInfo {
+  name?: string;
+  size?: string;
+  modifiedAt?: string;
+  digest?: string;
+  family?: string;
+  parameterSize?: string;
+  quantizationLevel?: string;
 }
 
-export interface BedrockResponseData {
-  marketingPlan: string;
-  posts: PromoPost[];
+export interface OllamaModelStatus {
+  name: string;
+  available: boolean;
+  info: OllamaModelInfo | null;
+}
+
+export interface OllamaConfigStatus {
+  ollamaAvailable: boolean;
+  modelAvailable: boolean;
+  baseUrl: string;
+  modelId: string;
+  modelInfo: OllamaModelInfo | null;
+  models: OllamaModelStatus[];
+}
+
+export interface GeneratePostsRequestData {
+  event: EventDetails;
+  model?: string;
+}
+
+export interface GeneratePostsErrorData {
+  error: string;
 }

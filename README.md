@@ -16,7 +16,8 @@ PromoPulse is an intelligent event marketing and campaign generation platform. I
 ### Prerequisites
 
 - **Node.js** (v18 or higher recommended)
-- **AWS Credentials**: The app uses AWS Bedrock for content generation. Ensure you have access to a supported model (e.g., Amazon Titan).
+- **Ollama** running locally
+- One or more configured Ollama models, for example `qwen2.5:3b`
 
 ### 1. Install Dependencies
 
@@ -24,18 +25,35 @@ PromoPulse is an intelligent event marketing and campaign generation platform. I
 npm install
 ```
 
-### 2. Configure Environment Variables
+### 2. Pull an Ollama Model
 
-Create a `.env` file in the root directory (using `.env.example` as a template) and add your AWS credentials:
+Install and start Ollama, then pull at least one model:
 
-```env
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-AWS_REGION=us-east-1
-AWS_BEDROCK_MODEL_ID=amazon.titan-text-express-v1
+```bash
+ollama pull qwen2.5:3b
 ```
 
-### 3. Start the Development Server
+You can verify that Ollama is available with:
+
+```bash
+ollama list
+```
+
+By default, the app expects Ollama at `http://localhost:11434`.
+
+### 3. Configure Environment Variables
+
+Create a `.env` file in the root directory (using `.env.example` as a template):
+
+```env
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:3b
+OLLAMA_MODELS=gpt-oss:120b-cloud,qwen3.5:cloud,gemini-3-flash-preview:cloud,ministral-3:8b-cloud,nemotron-3-nano:30b-cloud,qwen2.5:3b,qwen3:4b,gemma3:4b,llama3.2:3b,qwen2.5:14b
+```
+
+`OLLAMA_MODEL` is the default model selected when the app starts. `OLLAMA_MODELS` is the comma-separated list shown in the model selector.
+
+### 4. Start the Development Server
 
 ```bash
 npm run dev
@@ -43,11 +61,26 @@ npm run dev
 
 The app will be accessible at [http://localhost:3000](http://localhost:3000).
 
+## Model Comparison
+
+The app supports switching between multiple Ollama models from **Event Details** and **Ollama Settings**. See [`docs/ollama-models.md`](docs/ollama-models.md) for model configuration, cloud model notes, known access issues and comparison workflow.
+
+## Verify Before Commit
+
+Use these checks before committing changes:
+
+```bash
+npm run lint
+npm run build
+```
+
+`npm run dev` starts the local development server. `npm run build` creates a production bundle and is useful as a final validation step before committing.
+
 ---
 
 ## Run with Docker
 
-If you prefer to use Docker, follow these steps:
+If you prefer to use Docker, first make sure the container can reach your Ollama instance.
 
 ### 1. Build the Image
 
@@ -55,13 +88,12 @@ If you prefer to use Docker, follow these steps:
 docker build -t promopulse-app .
 ```
 
-### 2. Run the Container
+### 2. Run the Container on Windows/macOS
 
-```bash
-docker run -p 3000:3000 \
-  -e AWS_ACCESS_KEY_ID=your_access_key \
-  -e AWS_SECRET_ACCESS_KEY=your_secret_key \
-  -e AWS_REGION=us-east-1 \
-  -e AWS_BEDROCK_MODEL_ID=amazon.titan-text-express-v1 \
+```powershell
+docker run -p 3000:3000 ^
+  -e OLLAMA_BASE_URL=http://host.docker.internal:11434 ^
+  -e OLLAMA_MODEL=qwen2.5:3b ^
+  -e OLLAMA_MODELS=gpt-oss:120b-cloud,qwen3.5:cloud,gemini-3-flash-preview:cloud,ministral-3:8b-cloud,nemotron-3-nano:30b-cloud,qwen2.5:3b,qwen3:4b,gemma3:4b,llama3.2:3b,qwen2.5:14b ^
   promopulse-app
 ```
